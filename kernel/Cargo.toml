@@ -1,0 +1,27 @@
+[package]
+name = "qunix-kernel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+spin                  = "0.9"
+bitflags              = "2.4"
+linked_list_allocator = "0.10"
+lazy_static           = { version = "1.4", features = ["spin_no_std"] }
+
+[[bin]]
+name = "kernel"
+path = "src/main.rs"
+
+[features]
+embedded_init = []
+
+[profile.dev]
+panic          = "abort"
+opt-level      = 0
+
+[profile.release]
+panic          = "abort"
+opt-level      = 3
+lto            = true
+codegen-units  = 1

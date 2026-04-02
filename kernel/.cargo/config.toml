@@ -1,0 +1,18 @@
+[build]
+target = "x86_64-unknown-none"
+
+[target.x86_64-unknown-none]
+linker = "/usr/bin/ld"
+rustflags = [
+    "-C", "relocation-model=static",
+    "-C", "code-model=kernel",
+    "-C", "target-feature=-mmx,-sse,-red-zone",
+    "-C", "link-arg=-Tkernel.ld",
+    "-C", "link-arg=--no-gc-sections",
+]
+
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"

@@ -1,0 +1,9 @@
+[build]
+target = "x86_64-qunix-user.json"
+
+# Note: -Tuser.ld is injected as an absolute path via RUSTFLAGS in build.sh
+# to avoid relative-path resolution issues when building from subdirectories.
+
+[unstable]
+build-std = ["core", "alloc", "compiler_builtins"]
+build-std-features = ["compiler-builtins-mem"]

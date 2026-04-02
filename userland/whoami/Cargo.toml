@@ -1,0 +1,17 @@
+[package]
+name = "whoami_cmd"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+libsys = { path = "../libsys" }
+
+[[bin]]
+name = "whoami"
+path = "src/main.rs"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1

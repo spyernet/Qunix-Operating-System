@@ -1,0 +1,17 @@
+[package]
+name = "dirname"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+libsys = { path = "../libsys" }
+
+[[bin]]
+name = "dirname"
+path = "src/main.rs"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1
