@@ -40,7 +40,7 @@ pub extern "sysv64" fn kernel_main(boot_info_ptr: u64) -> ! {
     let boot_info = unsafe { &*(boot_info_ptr as *const BootInfo) };
 
     drivers::serial::init();
-    klog!("Qunix v0.2 booting");
+    klog!("Qunix v0.2.0 booting");
 
     arch::x86_64::gdt::init();
     arch::x86_64::idt::init();

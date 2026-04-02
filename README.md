@@ -111,7 +111,7 @@ qunix/
 
 ## Recent Changes
 
-### Initial Release (v0.2)
+### Initial Release (v0.2.0)
 - Complete kernel implementation with full process model
 - 70+ userland utilities including modern shell (qsh)
 - Multiple filesystem support (ext4, FAT32, tmpfs, devfs, procfs)
