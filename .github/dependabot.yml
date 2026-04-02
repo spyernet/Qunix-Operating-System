@@ -1,3 +1,5 @@
+# TODO: Add a workspace Cargo.toml to reduce the size of this file
+
 version: 2
 updates:
   - package-ecosystem: "cargo"
