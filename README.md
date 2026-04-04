@@ -1,7 +1,7 @@
 ![OS logo](visuals/logo.png)
 # Qunix OS
 
-A Unix-like operating system kernel written in Rust for everyone.
+A Unix-like operating system written in Rust for everyone.
 
 ## Features
 
