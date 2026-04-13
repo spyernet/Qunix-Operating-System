@@ -237,8 +237,4 @@ QEMU_AUDIO_DRV=none qemu-system-x86_64 \
     -cpu qemu64 \
     -kernel "$KERNEL" \
     -serial stdio \
-    -display none \
-    -audio none \
-    -no-reboot \
-    -net none \
     "$@"

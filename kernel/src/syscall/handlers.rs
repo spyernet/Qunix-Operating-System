@@ -76,14 +76,25 @@ pub fn sys_read(fd: i32, buf: u64, count: usize) -> i64 {
     if count == 0 { return 0; }
     // Validate user buffer pointer before touching it
     if buf == 0 || !crate::security::is_user_ptr_valid(buf, count) { return EFAULT; }
-    let result = process::with_current(|p| {
-        p.get_fd(fd as u32).map(|f| {
-            vfs::read_fd(&f, buf as *mut u8, count)
-        })
-    }).flatten();
-    match result {
-        Some(Ok(n))  => {
-            // Advance offset
+
+    // Clone the fd out of the process table BEFORE doing I/O.
+    //
+    // DEADLOCK PREVENTION: with_current() holds the process TABLE spinlock
+    // for the entire duration of its closure.  vfs::read_fd() on a TTY calls
+    // tty_read() → block_current() → current_pid() which tries to re-acquire
+    // the same spinlock → permanent spin deadlock.
+    //
+    // Cloning (Arc bumps a refcount) is cheap; all ops after this are lock-free
+    // with respect to the process table.
+    let fd_obj = match process::with_current(|p| p.get_fd(fd as u32)).clone().flatten() {
+        Some(f) => f,
+        None    => return EBADF,
+    };
+    // TABLE lock is released here — safe to block.
+
+    match vfs::read_fd(&fd_obj, buf as *mut u8, count) {
+        Ok(n)  => {
+            // Advance offset under a brief TABLE lock (non-blocking).
             process::with_current_mut(|p| {
                 p.get_fd_mut_op(fd as u32, |f| {
                     match &f.kind {
@@ -96,8 +107,9 @@ pub fn sys_read(fd: i32, buf: u64, count: usize) -> i64 {
             });
             n as i64
         }
-        Some(Err(e)) => vfs_err(e),
-        None         => EBADF,
+        Err(e) => {
+            vfs_err(e)
+        }
     }
 }
 
@@ -105,13 +117,16 @@ pub fn sys_write(fd: i32, buf: u64, count: usize) -> i64 {
     if count == 0 { return 0; }
     // Validate user buffer pointer before touching it
     if buf == 0 || !crate::security::is_user_ptr_valid(buf, count) { return EFAULT; }
-    let result = process::with_current(|p| {
-        p.get_fd(fd as u32).map(|f| {
-            vfs::write_fd(&f, buf as *const u8, count)
-        })
-    }).flatten();
-    match result {
-        Some(Ok(n))  => {
+
+    // Clone fd before releasing TABLE lock — same deadlock risk as sys_read
+    // (write can block on pipes, so holding the lock during I/O is unsafe).
+    let fd_obj = match process::with_current(|p| p.get_fd(fd as u32)).clone().flatten() {
+        Some(f) => f,
+        None    => return EBADF,
+    };
+
+    match vfs::write_fd(&fd_obj, buf as *const u8, count) {
+        Ok(n)  => {
             process::with_current_mut(|p| {
                 p.get_fd_mut_op(fd as u32, |f| {
                     if let crate::vfs::FdKind::Regular = &f.kind { f.offset += n as u64; }
@@ -119,31 +134,34 @@ pub fn sys_write(fd: i32, buf: u64, count: usize) -> i64 {
             });
             n as i64
         }
-        Some(Err(e)) => vfs_err(e),
-        None         => EBADF,
+        Err(e) => vfs_err(e),
     }
 }
 
 pub fn sys_pread64(fd: i32, buf: u64, count: usize, offset: i64) -> i64 {
-    let result = process::with_current(|p| {
-        p.get_fd(fd as u32).map(|f| {
-            let mut f2 = f.clone();
-            f2.offset = offset as u64;
-            vfs::read_fd(&f2, buf as *mut u8, count)
-        })
-    }).flatten();
-    match result { Some(Ok(n)) => n as i64, Some(Err(e)) => vfs_err(e), None => EBADF }
+    let fd_obj = match process::with_current(|p| p.get_fd(fd as u32)).clone().flatten() {
+        Some(f) => f,
+        None    => return EBADF,
+    };
+    let mut f2 = fd_obj;
+    f2.offset = offset as u64;
+    match vfs::read_fd(&f2, buf as *mut u8, count) {
+        Ok(n) => n as i64,
+        Err(e) => vfs_err(e),
+    }
 }
 
 pub fn sys_pwrite64(fd: i32, buf: u64, count: usize, offset: i64) -> i64 {
-    let result = process::with_current(|p| {
-        p.get_fd(fd as u32).map(|f| {
-            let mut f2 = f.clone();
-            f2.offset = offset as u64;
-            vfs::write_fd(&f2, buf as *const u8, count)
-        })
-    }).flatten();
-    match result { Some(Ok(n)) => n as i64, Some(Err(e)) => vfs_err(e), None => EBADF }
+    let fd_obj = match process::with_current(|p| p.get_fd(fd as u32)).clone().flatten() {
+        Some(f) => f,
+        None    => return EBADF,
+    };
+    let mut f2 = fd_obj;
+    f2.offset = offset as u64;
+    match vfs::write_fd(&f2, buf as *const u8, count) {
+        Ok(n) => n as i64,
+        Err(e) => vfs_err(e),
+    }
 }
 
 #[repr(C)] struct IoVec { base: u64, len: u64 }
@@ -244,26 +262,23 @@ pub fn sys_close(fd: i32) -> i64 {
 }
 
 pub fn sys_lseek(fd: i32, offset: i64, whence: i32) -> i64 {
-    // SEEK_END (whence=2): must use the *live* file size, not the cached inode.size.
-    // Re-stat via ops to get the current size, then update the fd snapshot.
+    // Clone the fd so we can call lseek without holding the TABLE lock.
+    // SEEK_END (whence=2) needs the live inode size which may require an
+    // I/O probe — unsafe to do while TABLE is locked.
     if whence == 2 {
-        // Refresh inode size before delegating to vfs::lseek
-        let refresh = process::with_current(|p| {
-            p.get_fd(fd as u32).map(|f| {
-                // Ask the inode ops for current stat to get live size
-                let live_size = f.inode.ops.read(&f.inode, &mut [], 0)
-                    .ok()
-                    .map(|_| f.inode.size) // read(0 bytes) just probes
-                    .unwrap_or(f.inode.size);
-                live_size
-            })
+        let fd_obj = match process::with_current(|p| p.get_fd(fd as u32)).clone().flatten() {
+            Some(f) => f,
+            None    => return EBADF,
+        };
+        // Probe live size outside the TABLE lock
+        let live_size = fd_obj.inode.ops.read(&fd_obj.inode, &mut [], 0)
+            .ok()
+            .map(|_| fd_obj.inode.size)
+            .unwrap_or(fd_obj.inode.size);
+        // Write size back and compute new offset
+        process::with_current_mut(|p| {
+            p.get_fd_mut_op(fd as u32, |f| { f.inode.size = live_size; })
         });
-        if let Some(live_size) = refresh.flatten() {
-            // Update cached inode size on the fd
-            process::with_current_mut(|p| {
-                p.get_fd_mut_op(fd as u32, |f| { f.inode.size = live_size; });
-            });
-        }
     }
     let r = process::with_current_mut(|p| {
         p.get_fd_mut_op(fd as u32, |f| vfs::lseek(f, offset, whence))
@@ -290,9 +305,14 @@ pub fn sys_lstat(path: u64, buf: u64) -> i64 {
 }
 
 pub fn sys_fstat(fd: i32, buf: u64) -> i64 {
-    let r = process::with_current(|p| p.get_fd(fd as u32).map(|f| vfs::fstat(&f))).flatten();
-    match r { Some(Ok(s)) => { unsafe { *(buf as *mut vfs::Stat) = s; } 0 }
-              Some(Err(e)) => vfs_err(e), None => EBADF }
+    let fd_obj = match process::with_current(|p| p.get_fd(fd as u32)).clone().flatten() {
+        Some(f) => f,
+        None    => return EBADF,
+    };
+    match vfs::fstat(&fd_obj) {
+        Ok(s)  => { unsafe { *(buf as *mut vfs::Stat) = s; } 0 }
+        Err(e) => vfs_err(e),
+    }
 }
 
 pub fn sys_newfstatat(dirfd: i32, path: u64, buf: u64, flags: i32) -> i64 {
@@ -331,25 +351,20 @@ pub fn sys_ftruncate(fd: i32, len: i64) -> i64 {
 }
 
 pub fn sys_getdents64(fd: i32, buf: u64, count: usize) -> i64 {
-    // Use getdents_and_advance so we get (bytes_written, entries_consumed).
-    // fd.offset is an entry count: we skip that many entries, then advance it.
-    let r = process::with_current(|p| {
-        p.get_fd(fd as u32).map(|f| {
-            vfs::getdents_and_advance(&f, buf as *mut u8, count)
-        })
-    }).flatten();
-    match r {
-        Some(Ok((bytes, entries))) => {
+    let fd_obj = match process::with_current(|p| p.get_fd(fd as u32)).clone().flatten() {
+        Some(f) => f,
+        None    => return EBADF,
+    };
+    match vfs::getdents_and_advance(&fd_obj, buf as *mut u8, count) {
+        Ok((bytes, entries)) => {
             if entries > 0 {
-                // Advance offset by the number of directory entries consumed.
                 process::with_current_mut(|p| {
                     p.get_fd_mut_op(fd as u32, |f| { f.offset += entries; });
                 });
             }
             bytes as i64
         }
-        Some(Err(e)) => vfs_err(e),
-        None => EBADF,
+        Err(e) => vfs_err(e),
     }
 }
 
@@ -866,12 +881,16 @@ pub fn sys_execve(path: u64, argv: u64, envp: u64) -> i64 {
     if vfs::s_isdir(fd.inode.mode) { return vfs_err(vfs::EISDIR); }
     // Reject zero-size files (permission denied is a better signal than ENOENT)
     if fd.inode.size == 0 { return vfs_err(vfs::EACCES); }
-    let mut data = alloc::vec![];
-    vfs::read_all_fd(&fd, &mut data);
-    if data.is_empty() { return vfs_err(vfs::ENOENT); }
 
-    match crate::elf::exec(data, args, env) {
+    match crate::elf::exec_fd(&fd, args, env) {
         Ok(result) => {
+            crate::klog!(
+                "execve: {} entry={:#x} stack={:#x} tls={:#x}",
+                pathname,
+                result.entry,
+                result.stack_top,
+                result.tls_addr,
+            );
             // Set FS.base for TLS if present
             if result.tls_addr != 0 {
                 unsafe { crate::arch::x86_64::msr::write(
@@ -940,9 +959,24 @@ pub fn sys_execve(path: u64, argv: u64, envp: u64) -> i64 {
                 proc.sig_pending = crate::signal::SignalSet::empty();
             });
 
+            let kstack_top = process::with_current(|p| {
+                (p.kernel_stack.as_ptr() as u64 + crate::process::KERNEL_STACK_SIZE as u64) & !0xFu64
+            }).unwrap_or(0);
+            crate::arch::x86_64::gdt::set_kernel_stack(kstack_top);
+            crate::arch::x86_64::smp::set_kernel_stack(kstack_top);
+
             // Activate the new page tables before jumping
             process::with_current(|p| p.address_space.activate());
-            unsafe { crate::elf::exec_usermode_noreturn(result.entry, result.stack_top) }
+            crate::drivers::serial::write_str("[execve] pre-iret\n");
+            unsafe {
+                crate::elf::exec_usermode_noreturn(
+                    result.entry,
+                    result.stack_top,
+                    result.argc,
+                    result.argv_ptr,
+                    result.envp_ptr,
+                )
+            }
         }
         Err(e) => -(e as i64),
     }

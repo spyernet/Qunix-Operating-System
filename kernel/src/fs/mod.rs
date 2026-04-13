@@ -139,24 +139,33 @@ fn install_boot_userland(boot_info: &BootInfo) {
 
     if let Some(init) = phys_blob(boot_info.init_phys_start, boot_info.init_size) {
         crate::klog!("fs: installing init ({})", init.len());
-        write_file("/sbin/init", init);
-        write_file("/bin/init", init);
-        crate::klog!("fs: init installed");
+        crate::klog!("fs: [init 1/2] attempting write_file /sbin/init");
+        let w1 = write_file("/sbin/init", init);
+        crate::klog!("fs: [init 1/2] wrote {} bytes", w1);
+        crate::klog!("fs: [init 2/2] attempting write_file /bin/init");
+        let w2 = write_file("/bin/init", init);
+        crate::klog!("fs: [init 2/2] wrote {} bytes", w2);
+        crate::klog!("fs: init installed (sbin={} bin={})", w1, w2);
     }
     if let Some(qshell) = phys_blob(boot_info.qshell_phys_start, boot_info.qshell_size) {
         crate::klog!("fs: installing qshell ({})", qshell.len());
-        let written = write_file("/bin/qsh",    qshell);
-        crate::klog!("fs: /bin/qsh written {} bytes", written);
-        let written = write_file("/bin/qshell", qshell);
-        crate::klog!("fs: /bin/qshell written {} bytes", written);
-        crate::klog!("fs: qshell installed");
+        
+        crate::klog!("fs: [qsh 1/2] attempting write_file /bin/qsh ({}B)", qshell.len());
+        let written1 = write_file("/bin/qsh", qshell);
+        crate::klog!("fs: [qsh 1/2] write_file /bin/qsh returned {}", written1);
+        
+        crate::klog!("fs: [qsh 2/2] attempting write_file /bin/qshell ({}B)", qshell.len());
+        let written2 = write_file("/bin/qshell", qshell);
+        crate::klog!("fs: [qsh 2/2] write_file /bin/qshell returned {}", written2);
+        
+        crate::klog!("fs: qshell installed (qsh={} qshell={})", written1, written2);
     }
 }
 
 fn write_file(path: &str, data: &[u8]) -> usize {
     use crate::vfs::{O_CREAT, O_WRONLY, O_TRUNC};
-    let cwd = alloc::string::String::from("/");
-    match crate::vfs::open(&cwd, path, O_CREAT | O_WRONLY | O_TRUNC, 0o644) {
+    let cwd = "/";
+    match crate::vfs::open(cwd, path, O_CREAT | O_WRONLY | O_TRUNC, 0o644) {
         Ok(fd) => match fd.inode.ops.write(&fd.inode, data, 0) {
             Ok(n) => n,
             Err(_) => 0,

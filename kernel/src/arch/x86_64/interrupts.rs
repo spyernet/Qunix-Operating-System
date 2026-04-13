@@ -1,5 +1,38 @@
 use core::arch::global_asm;
 
+fn serial_write_hex(label: &str, value: u64) {
+    crate::drivers::serial::write_str(label);
+    crate::drivers::serial::write_str("0x");
+    let mut started = false;
+    for shift in (0..16).rev() {
+        let nibble = ((value >> (shift * 4)) & 0xF) as u8;
+        if nibble != 0 || started || shift == 0 {
+            started = true;
+            let ch = match nibble {
+                0..=9 => b'0' + nibble,
+                _ => b'a' + (nibble - 10),
+            };
+            crate::drivers::serial::write_byte(ch);
+        }
+    }
+}
+
+fn serial_write_pf(frame: &InterruptFrame, cr2: u64) {
+    serial_write_hex(" rip=", frame.rip);
+    serial_write_hex(" cr2=", cr2);
+    serial_write_hex(" err=", frame.err_code);
+    let page = cr2 & !0xFFF;
+    let pte_flags = unsafe {
+        crate::arch::x86_64::paging::PageMapper::current().get_flags(page)
+    };
+    if let Some(flags) = pte_flags {
+        serial_write_hex(" pte=", flags.bits());
+    } else {
+        crate::drivers::serial::write_str(" pte=<none>");
+    }
+    crate::drivers::serial::write_str("\n");
+}
+
 #[repr(C)]
 pub struct InterruptFrame {
     pub r15: u64, pub r14: u64, pub r13: u64, pub r12: u64,
@@ -183,11 +216,28 @@ pub extern "C" fn irq_dispatch(frame: &mut InterruptFrame) {
 fn handle_page_fault(frame: &InterruptFrame) {
     let cr2: u64;
     unsafe { core::arch::asm!("mov {}, cr2", out(reg) cr2); }
-    if frame.err_code & 4 != 0 {
+    let is_write = frame.err_code & 2 != 0;
+    let is_user = frame.err_code & 4 != 0;
+
+    if is_write && is_user {
+        let handled = crate::process::with_current_mut(|p| {
+            p.address_space.handle_cow_fault(cr2)
+        });
+        if handled.unwrap_or(false) {
+            crate::perf::PERF.inc_page_fault();
+            return;
+        }
+    }
+
+    if is_user {
         crate::drivers::serial::write_str("[pf] user page fault\n");
+        serial_write_pf(frame, cr2);
+    } else {
+        crate::drivers::serial::write_str("[pf] kernel page fault\n");
+        serial_write_pf(frame, cr2);
     }
     crate::klog!("Page fault at {:#x} accessing {:#x} err={:#x}", frame.rip, cr2, frame.err_code);
-    if frame.err_code & 4 != 0 {
+    if is_user {
         crate::process::kill_current(crate::signal::SIGSEGV);
     } else {
         panic!("Kernel page fault at {:#x} cr2={:#x}", frame.rip, cr2);
@@ -196,21 +246,26 @@ fn handle_page_fault(frame: &InterruptFrame) {
 
 fn handle_gpf(frame: &InterruptFrame) {
     if frame.cs & 3 == 3 {
+        crate::drivers::serial::write_str("[gpf] user\n");
         crate::klog!("User GPF at rip={:#x}", frame.rip);
         crate::process::kill_current(crate::signal::SIGSEGV);
     } else {
+        crate::drivers::serial::write_str("[gpf] kernel\n");
         panic!("Kernel GPF at rip={:#x} err={:#x}", frame.rip, frame.err_code);
     }
 }
 
 fn handle_double_fault(frame: &InterruptFrame) {
+    crate::drivers::serial::write_str("[df]\n");
     panic!("Double fault at rip={:#x}", frame.rip);
 }
 
 fn handle_invalid_opcode(frame: &InterruptFrame) {
     if frame.cs & 3 == 3 {
+        crate::drivers::serial::write_str("[ud] user\n");
         crate::process::kill_current(crate::signal::SIGILL);
     } else {
+        crate::drivers::serial::write_str("[ud] kernel\n");
         panic!("Invalid opcode at rip={:#x}", frame.rip);
     }
 }

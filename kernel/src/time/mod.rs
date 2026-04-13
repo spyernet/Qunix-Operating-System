@@ -27,6 +27,7 @@ pub fn init() {
 
 fn timer_irq(_: &crate::arch::x86_64::interrupts::InterruptFrame) {
     let t = MONOTONIC_TICKS.fetch_add(1, Ordering::Relaxed) + 1;
+    crate::tty::poll_input_devices();
     wake_sleeping_processes(t);
     crate::sched::tick();
     // In IRQ context: only deliver default-disposition signals.

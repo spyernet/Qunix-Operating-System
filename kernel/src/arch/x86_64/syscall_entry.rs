@@ -37,6 +37,11 @@ syscall_entry:
     push   r14
     push   r15
 
+    // Re-enable interrupts only after the full syscall frame is present on
+    // the kernel stack. An IRQ arriving earlier can nest on top of a partial
+    // frame and corrupt the eventual sysret state for this syscall.
+    sti
+
     // syscall_dispatch(nr: u64, frame: &mut SyscallFrame) -> i64
     mov    rdi, rax     // nr
     mov    rsi, rsp     // frame pointer
@@ -65,6 +70,10 @@ syscall_exit:
     pop    r11          // user rflags -> r11 for sysretq
     pop    rcx          // user rip   -> rcx for sysretq
 
+    // Disable interrupts before restoring user RSP and doing sysretq.
+    // Between swapgs and sysretq the GS base still points at the kernel
+    // percpu area; an IRQ in that window would corrupt gs:[16].
+    cli
     // restore user rsp
     mov    rsp, gs:[16]
     swapgs

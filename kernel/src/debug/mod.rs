@@ -21,6 +21,7 @@ impl fmt::Write for KernelLogger {
 
 pub fn _klog(args: fmt::Arguments) {
     use fmt::Write;
+    let _irq_guard = crate::arch::x86_64::cpu::IrqGuard::new();
     let mut l = KernelLogger;
     let _ = l.write_str("[QUNIX] ");
     let _ = l.write_fmt(args);
@@ -29,11 +30,13 @@ pub fn _klog(args: fmt::Arguments) {
 
 pub fn _kprint(args: fmt::Arguments) {
     use fmt::Write;
+    let _irq_guard = crate::arch::x86_64::cpu::IrqGuard::new();
     let _ = KernelLogger.write_fmt(args);
 }
 
 pub fn panic_handler(info: &PanicInfo) -> ! {
     use fmt::Write;
+    let _irq_guard = crate::arch::x86_64::cpu::IrqGuard::new();
     let mut l = KernelLogger;
     let _ = writeln!(l, "\n--- QUNIX KERNEL PANIC ---");
     if let Some(loc) = info.location() {

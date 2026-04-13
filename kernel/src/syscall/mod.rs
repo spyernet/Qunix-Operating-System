@@ -32,27 +32,27 @@ const fn make_table() -> [SyscallFn; NR_SYSCALLS] {
     use handlers::*;
 
     // ── File I/O ──────────────────────────────────────────────────────────
-    t[0]   = |_,buf,len,_,_,_,f| sys_read(f.rdi as i32, buf, len as usize);
-    t[1]   = |_,buf,len,_,_,_,f| sys_write(f.rdi as i32, buf, len as usize);
+    t[0]   = |_,fd,buf,len,_,_,_| sys_read(fd as i32, buf, len as usize);
+    t[1]   = |_,fd,buf,len,_,_,_| sys_write(fd as i32, buf, len as usize);
     t[2]   = |_,path,flags,mode,_,_,f| sys_open(path, flags as i32, mode as u32);
     t[3]   = |_,_,_,_,_,_,f| sys_close(f.rdi as i32);
     t[4]   = |_,path,st,_,_,_,_| sys_stat(path, st);
     t[5]   = |_,fd,st,_,_,_,_| sys_fstat(fd as i32, st);
     t[6]   = |_,path,st,_,_,_,_| sys_lstat(path, st);
     t[7]   = |_,fds,n,_,_,_,f| sys_poll(fds, n as u32, f.rdx as i32);
-    t[8]   = |_,off,whence,_,_,_,f| sys_lseek(f.rdi as i32, off as i64, whence as i32);
+    t[8]   = |_,fd,off,whence,_,_,_| sys_lseek(fd as i32, off as i64, whence as i32);
     t[9]   = |_,addr,len,prot,flags,fd,f| sys_mmap(addr, len, prot as i32, flags as i32, fd as i32, f.r9 as u64);
     t[10]  = |_,addr,len,prot,_,_,_| sys_mprotect(addr, len, prot as i32);
     t[11]  = |_,addr,len,_,_,_,_| sys_munmap(addr, len);
     t[12]  = |_,brk,_,_,_,_,_| sys_brk(brk);
-    t[13]  = |_,handler,flags,_,_,_,f| sys_rt_sigaction(f.rdi as i32, handler, flags, f.r10 as usize);
-    t[14]  = |_,how,set,old,_,_,f| sys_rt_sigprocmask(f.rdi as i32, set, old, f.r10 as usize);
+    t[13]  = |_,sig,handler,flags,sigsetsize,_,_| sys_rt_sigaction(sig as i32, handler, flags, sigsetsize as usize);
+    t[14]  = |_,how,set,old,sigsetsize,_,_| sys_rt_sigprocmask(how as i32, set, old, sigsetsize as usize);
     t[15]  = |_,_,_,_,_,_,f| sys_rt_sigreturn(f);
-    t[16]  = |_,req,_,_,_,_,f| sys_ioctl(f.rdi as i32, f.rsi, req);
-    t[17]  = |_,buf,count,_,_,_,f| sys_pread64(f.rdi as i32, buf, count as usize, f.r10 as i64);
-    t[18]  = |_,buf,count,_,_,_,f| sys_pwrite64(f.rdi as i32, buf, count as usize, f.r10 as i64);
-    t[19]  = |_,iov,iovcnt,_,_,_,f| sys_readv(f.rdi as i32, iov, iovcnt as usize);
-    t[20]  = |_,iov,iovcnt,_,_,_,f| sys_writev(f.rdi as i32, iov, iovcnt as usize);
+    t[16]  = |_,fd,req,arg,_,_,_| sys_ioctl(fd as i32, req, arg);
+    t[17]  = |_,fd,buf,count,offset,_,_| sys_pread64(fd as i32, buf, count as usize, offset as i64);
+    t[18]  = |_,fd,buf,count,offset,_,_| sys_pwrite64(fd as i32, buf, count as usize, offset as i64);
+    t[19]  = |_,fd,iov,iovcnt,_,_,_| sys_readv(fd as i32, iov, iovcnt as usize);
+    t[20]  = |_,fd,iov,iovcnt,_,_,_| sys_writev(fd as i32, iov, iovcnt as usize);
     t[21]  = |_,path,mode,_,_,_,_| sys_access(path, mode as i32);
     t[22]  = |_,fds,_,_,_,_,_| sys_pipe(fds);
     t[23]  = |_,nfds,r,w,e,t,_| sys_select(nfds as i32, r, w, e, t);
@@ -78,7 +78,7 @@ const fn make_table() -> [SyscallFn; NR_SYSCALLS] {
     t[59]  = |_,path,argv,envp,_,_,_| sys_execve(path, argv, envp);
     t[60]  = |_,code,_,_,_,_,_| sys_exit(code as i32);
     t[61]  = |_,pid,status,opts,_,_,_| sys_wait4(pid as i32, status, opts as i32, 0u64);
-    t[62]  = |_,sig,_,_,_,_,f| sys_kill(f.rdi as i32, sig as i32);
+    t[62]  = |_,pid,sig,_,_,_,_| sys_kill(pid as i32, sig as i32);
 
     // ── Process / identity ─────────────────────────────────────────────
     t[63]  = |_,buf,_,_,_,_,_| sys_uname(buf);
@@ -119,10 +119,10 @@ const fn make_table() -> [SyscallFn; NR_SYSCALLS] {
     t[106] = |_,_,_,_,_,_,_| 0; // setgid
     t[107] = |_,_,_,_,_,_,_| 0i64; // geteuid
     t[108] = |_,_,_,_,_,_,_| 0i64; // getegid
-    t[109] = |_,_,_,_,_,_,_| 0; // setpgid
-    t[110] = |_,_,_,_,_,_,_| 0i64; // getppid
-    t[111] = |_,_,_,_,_,_,_| 0i64; // getpgrp
-    t[112] = |_,_,_,_,_,_,_| crate::process::current_pid() as i64; // setsid
+    t[109] = |_,pid,pgid,_,_,_,_| sys_setpgid(pid as i32, pgid as i32);
+    t[110] = |_,_,_,_,_,_,_| sys_getppid();
+    t[111] = |_,_,_,_,_,_,_| sys_getpgrp();
+    t[112] = |_,_,_,_,_,_,_| sys_setsid();
     t[113] = |_,_,_,_,_,_,_| 0; // setreuid
     t[114] = |_,_,_,_,_,_,_| 0; // setregid
     t[115] = |_,_,_,_,_,_,_| 0; // getgroups

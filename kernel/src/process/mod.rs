@@ -15,9 +15,14 @@ pub type Pid = u32;
 pub type Uid = u32;
 pub type Gid = u32;
 
-pub const KERNEL_STACK_SIZE: usize = 32 * 1024;
+pub const KERNEL_STACK_SIZE: usize = 64 * 1024;  // Increased from 32KB to 64KB for safety margin
 pub const MAX_FDS: usize = 1024;
 pub const MAX_PIDS: usize = 65536;
+
+#[inline]
+fn align_kernel_stack_top(base: u64) -> u64 {
+    base & !0xFu64
+}
 
 // ── Shared resources between threads ─────────────────────────────────────
 
@@ -156,10 +161,34 @@ pub const PERSONALITY_QUNIX: u32 = 0xFFFF;
 
 impl Process {
     pub fn new_kernel(pid: Pid, entry: u64) -> Self {
+        crate::drivers::serial::write_str("[new_kernel] start\n");
+        crate::drivers::serial::write_str("[new_kernel] pre-stack\n");
         let mut stack = alloc::vec![0u8; KERNEL_STACK_SIZE];
-        let rsp = stack.as_mut_ptr() as u64 + KERNEL_STACK_SIZE as u64 - 16;
+        crate::drivers::serial::write_str("[new_kernel] post-stack\n");
+        let stack_top = align_kernel_stack_top(stack.as_mut_ptr() as u64 + KERNEL_STACK_SIZE as u64);
+        let rsp = stack_top - 16;
         let mut ctx = CpuContext::zeroed();
         ctx.rsp = rsp; ctx.rip = entry;
+        crate::drivers::serial::write_str("[new_kernel] pre-address-space\n");
+        let address_space = AddressSpace::new_kernel();
+        crate::drivers::serial::write_str("[new_kernel] post-address-space\n");
+        let fds = BTreeMap::new();
+        let cwd = String::from("/");
+        let root = String::from("/");
+        crate::drivers::serial::write_str("[new_kernel] post-paths\n");
+        let groups = Vec::new();
+        let sig_pending = SignalSet::empty();
+        let sig_mask = SignalSet::empty();
+        let sig_actions = [SigAction::default(); 32];
+        let children = Vec::new();
+        let name = String::from("kthread");
+        crate::drivers::serial::write_str("[new_kernel] post-basic-allocs\n");
+        let syscall_filter = crate::security::SyscallFilter::allow_all();
+        let namespaces = crate::security::Namespaces::root();
+        let seccomp = crate::security::seccomp::FilterChain::new();
+        let pkey_map = crate::security::memory_tagging::PkeyAllocMap::new();
+        let sw_pkey_table = crate::security::memory_tagging::SoftwareKeyTable::default();
+        crate::drivers::serial::write_str("[new_kernel] pre-return\n");
         Process {
             pid, ppid: 0, pgid: pid, sid: pid, tty: -1,
             thread_group: None,
@@ -167,23 +196,23 @@ impl Process {
             context:  ctx,
             kernel_stack: stack,
             nice:     0, sleep_until: 0,
-            address_space: AddressSpace::new_kernel(),
-            fds: BTreeMap::new(), next_fd: 3,
-            cwd: String::from("/"), root: String::from("/"), umask: 0o022,
-            uid:0, gid:0, euid:0, egid:0, suid:0, sgid:0, groups: Vec::new(),
-            sig_pending: SignalSet::empty(), sig_mask: SignalSet::empty(),
-            sig_actions: [SigAction::default(); 32],
+            address_space,
+            fds, next_fd: 3,
+            cwd, root, umask: 0o022,
+            uid:0, gid:0, euid:0, egid:0, suid:0, sgid:0, groups,
+            sig_pending, sig_mask,
+            sig_actions,
             sig_altstack: 0,
             priority: 20, static_priority: 20,
-            exit_code: 0, children: Vec::new(),
-            name: String::from("kthread"), personality: PERSONALITY_QUNIX,
+            exit_code: 0, children,
+            name, personality: PERSONALITY_QUNIX,
             mac_label: crate::security::SecurityLabel::KERNEL,
-            syscall_filter: crate::security::SyscallFilter::allow_all(),
-            namespaces: crate::security::Namespaces::root(),
-            seccomp: crate::security::seccomp::FilterChain::new(),
-            pkey_map: crate::security::memory_tagging::PkeyAllocMap::new(),
+            syscall_filter,
+            namespaces,
+            seccomp,
+            pkey_map,
             pkru_shadow: 0,
-            sw_pkey_table: crate::security::memory_tagging::SoftwareKeyTable::default(),
+            sw_pkey_table,
             flags: 0, start_time: 0,
             fs_base: 0, clear_child_tid: 0,
         }
@@ -320,7 +349,7 @@ pub fn set_current(pid: Pid) {
         let mut t = TABLE.lock();
         t.current = pid;
         t.procs.get(&pid)
-            .map(|p| p.kernel_stack.as_ptr() as u64 + KERNEL_STACK_SIZE as u64)
+            .map(|p| align_kernel_stack_top(p.kernel_stack.as_ptr() as u64 + KERNEL_STACK_SIZE as u64))
             .unwrap_or(0)
     }; // lock dropped here
     if kstack_top != 0 {
@@ -352,7 +381,14 @@ pub fn with_process_mut<F, R>(pid: Pid, f: F) -> Option<R> where F: FnOnce(&mut 
 
 /// Spawn process. If proc.pid != 0, tries to use that PID (for init=1).
 pub fn spawn(mut proc: Process) -> Pid {
+    crate::drivers::serial::write_str("[spawn] enter\n");
+    // Keep IRQs masked while holding the global process-table lock. On a single
+    // CPU, a timer interrupt that re-enters process code and takes TABLE.lock()
+    // will deadlock against the interrupted holder.
+    let _irq_guard = crate::arch::x86_64::cpu::IrqGuard::new();
+    crate::drivers::serial::write_str("[spawn] irq-off\n");
     let mut t = TABLE.lock();
+    crate::drivers::serial::write_str("[spawn] table-locked\n");
     let pid = if proc.pid != 0 && !t.procs.contains_key(&proc.pid) {
         proc.pid
     } else {
@@ -361,13 +397,16 @@ pub fn spawn(mut proc: Process) -> Pid {
             None    => return 0, // PID space exhausted — caller must check
         }
     };
+    crate::drivers::serial::write_str("[spawn] pid-ready\n");
     proc.pid = pid;
     if proc.ppid != 0 && proc.ppid != pid {
         if let Some(parent) = t.procs.get_mut(&proc.ppid) {
             if !parent.children.contains(&pid) { parent.children.push(pid); }
         }
     }
+    crate::drivers::serial::write_str("[spawn] pre-insert\n");
     t.procs.insert(pid, proc);
+    crate::drivers::serial::write_str("[spawn] post-insert\n");
     pid
 }
 
@@ -418,7 +457,7 @@ pub fn fork_current() -> Option<Pid> {
     let child_root = parent.root.clone();
 
     let mut kstack = alloc::vec![0u8; KERNEL_STACK_SIZE];
-    let kst = kstack.as_mut_ptr() as u64 + KERNEL_STACK_SIZE as u64;
+    let kst = align_kernel_stack_top(kstack.as_mut_ptr() as u64 + KERNEL_STACK_SIZE as u64);
 
     // Build the child's initial kernel stack so that context_switch can
     // pick it up correctly and the child returns to userspace with rax=0.
@@ -432,9 +471,14 @@ pub fn fork_current() -> Option<Pid> {
     const SYSCALL_FRAME_SIZE: usize = 136; // 17 fields × 8 bytes
 
     // Copy parent's SyscallFrame from top of parent's kernel stack
-    let parent_frame_start = parent.kernel_stack.as_ptr() as usize
-        + KERNEL_STACK_SIZE - SYSCALL_FRAME_SIZE;
+    let parent_kstack_top = align_kernel_stack_top(
+        parent.kernel_stack.as_ptr() as u64 + KERNEL_STACK_SIZE as u64
+    ) as usize;
+    let parent_frame_start = parent_kstack_top - SYSCALL_FRAME_SIZE;
     unsafe {
+        let parent_rcx = *((parent_frame_start + 12 * 8) as *const u64);
+        let parent_rip = *((parent_frame_start + 16 * 8) as *const u64);
+        let parent_rflags = *((parent_frame_start + 15 * 8) as *const u64);
         core::ptr::copy_nonoverlapping(
             parent_frame_start as *const u8,
             (kst as usize - SYSCALL_FRAME_SIZE) as *mut u8,
@@ -449,6 +493,23 @@ pub fn fork_current() -> Option<Pid> {
         // Write fork_child_return address at [kst-144]
         let stub_ptr = crate::arch::x86_64::syscall_entry::fork_child_return as u64;
         *((kst as usize - SYSCALL_FRAME_SIZE - 8) as *mut u64) = stub_ptr;
+        let child_frame_start = kst as usize - SYSCALL_FRAME_SIZE;
+        let child_rcx = *((child_frame_start + 12 * 8) as *const u64);
+        let child_rip = *((child_frame_start + 16 * 8) as *const u64);
+        let child_rflags = *((child_frame_start + 15 * 8) as *const u64);
+        crate::klog!(
+            "fork: child stack kst={:#x} child_krsp={:#x} stub={:#x} ret_slot={:#x} parent_rcx={:#x} parent_rip={:#x} parent_rflags={:#x} child_rcx={:#x} child_rip={:#x} child_rflags={:#x}",
+            kst,
+            kst - SYSCALL_FRAME_SIZE as u64 - 8 - 48,
+            stub_ptr,
+            kst - SYSCALL_FRAME_SIZE as u64 - 8,
+            parent_rcx,
+            parent_rip,
+            parent_rflags,
+            child_rcx,
+            child_rip,
+            child_rflags,
+        );
 
         // 6 callee-saved slots are already zero (kstack is zeroed)
     }
@@ -533,13 +594,15 @@ pub fn clone_thread(
 
     // New kernel stack for the thread
     let mut kstack = alloc::vec![0u8; KERNEL_STACK_SIZE];
-    let kst = kstack.as_mut_ptr() as u64 + KERNEL_STACK_SIZE as u64;
+    let kst = align_kernel_stack_top(kstack.as_mut_ptr() as u64 + KERNEL_STACK_SIZE as u64);
 
     // Same child stack setup as fork: copy SyscallFrame, set rax=0.
     // Additionally override the saved user RSP with child_stack.
     const SYSCALL_FRAME_SIZE_T: usize = 136;
-    let parent_frame_start = parent.kernel_stack.as_ptr() as usize
-        + KERNEL_STACK_SIZE - SYSCALL_FRAME_SIZE_T;
+    let parent_kstack_top = align_kernel_stack_top(
+        parent.kernel_stack.as_ptr() as u64 + KERNEL_STACK_SIZE as u64
+    ) as usize;
+    let parent_frame_start = parent_kstack_top - SYSCALL_FRAME_SIZE_T;
     unsafe {
         core::ptr::copy_nonoverlapping(
             parent_frame_start as *const u8,
