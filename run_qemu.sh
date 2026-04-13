@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+#
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KERNEL_NEW="$SCRIPT_DIR/build/kernel.elf"
@@ -7,7 +8,7 @@ DISK_IMG="$SCRIPT_DIR/build/qunix.img"
 BOOTLOADER_EFI="$SCRIPT_DIR/build/bootx64.efi"
 ROOTFS_DIR="$SCRIPT_DIR/build/rootfs"
 KERNEL="$KERNEL_NEW"
-
+ 
 latest_mtime() {
     local latest=0
     local path
