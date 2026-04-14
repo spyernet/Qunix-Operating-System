@@ -1,1 +1,0 @@
-/mnt/c/Users/iammu/OneDrive/Documents/Projects/qunix-fixed/bootloader/target/x86_64-unknown-uefi/release/bootloader.efi: /mnt/c/Users/iammu/OneDrive/Documents/Projects/qunix-fixed/bootloader/src/main.rs
