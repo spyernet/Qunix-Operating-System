@@ -1,4 +1,4 @@
-![OS logo](visuals/logo.png)
+![OS logo](logos/logo.png)
 # Qunix OS
 
 A Unix-like operating system written in Rust for everyone.
