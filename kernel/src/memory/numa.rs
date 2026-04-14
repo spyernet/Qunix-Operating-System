@@ -1,3 +1,10 @@
+/*
+* Copyright (c) 2026 Mohammad Muzamil
+*
+* This file is part of QunixOS, an operating system written in Rust.
+* It is licensed under the Apache License, Version 2.0.
+*/
+
 //! NUMA (Non-Uniform Memory Access) topology and per-node memory allocator.
 //!
 //! Parses the ACPI SRAT (System Resource Affinity Table) to discover:

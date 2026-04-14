@@ -1,3 +1,10 @@
+/*
+* Copyright (c) 2026 Mohammad Muzamil
+*
+* This file is part of QunixOS, an operating system written in Rust.
+* It is licensed under the Apache License, Version 2.0.
+*/
+
 //! Display ioctl bridge: routes DRM-class ioctls from non-DRM fds to the
 //! Qunix display subsystem. Real DRM dispatch → crate::drm::drm_ioctl.
 

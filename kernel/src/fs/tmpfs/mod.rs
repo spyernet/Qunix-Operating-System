@@ -1,3 +1,10 @@
+/*
+* Copyright (c) 2026 Mohammad Muzamil
+*
+* This file is part of QunixOS, an operating system written in Rust.
+* It is licensed under the Apache License, Version 2.0.
+*/
+
 //! tmpfs - memory-backed filesystem, full read/write/create/mkdir/unlink.
 //!
 //! File contents are stored in 4 KiB pages so boot-time copies of larger ELF

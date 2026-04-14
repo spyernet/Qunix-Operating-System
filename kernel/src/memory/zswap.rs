@@ -1,3 +1,10 @@
+/*
+* Copyright (c) 2026 Mohammad Muzamil
+*
+* This file is part of QunixOS, an operating system written in Rust.
+* It is licensed under the Apache License, Version 2.0.
+*/
+
 //! zswap / zram — in-memory compressed page cache.
 //!
 //! ## What this does
@@ -10,14 +17,14 @@
 //!
 //!   ┌──────────────────────────────────────────────────────┐
 //!   │ VMM page eviction path                               │
-//!   │  → calls zswap_store(pid, vaddr, page_data)         │
-//!   │  ← returns a compressed page handle (u64)           │
+//!   │  → calls zswap_store(pid, vaddr, page_data)          │
+//!   │  ← returns a compressed page handle (u64)            │
 //!   └──────────────────────────────────────────────────────┘
 //!             │
 //!             ▼
 //!   ┌──────────────────────────────────────────────────────┐
 //!   │ Compressed pool (CompressedPool)                     │
-//!   │  Slab of 4 KB slots, each holding ≤4 KB of LZ4 data │
+//!   │  Slab of 4 KB slots, each holding ≤4 KB of LZ4 data  │
 //!   │  High watermark = ZSWAP_MAX_PAGES (default 20% RAM)  │
 //!   │  When full: writeback to disk or OOM                 │
 //!   └──────────────────────────────────────────────────────┘

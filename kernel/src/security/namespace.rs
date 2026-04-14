@@ -1,3 +1,10 @@
+/*
+* Copyright (c) 2026 Mohammad Muzamil
+*
+* This file is part of QunixOS, an operating system written in Rust.
+* It is licensed under the Apache License, Version 2.0.
+*/
+
 //! User namespace isolation — enforced cross-namespace boundaries.
 //!
 //! Qunix tracks six namespace types per process. This module enforces that

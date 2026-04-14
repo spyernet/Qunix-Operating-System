@@ -1,3 +1,10 @@
+/*
+* Copyright (c) 2026 Mohammad Muzamil
+*
+* This file is part of QunixOS, an operating system written in Rust.
+* It is licensed under the Apache License, Version 2.0.
+*/
+
 use crate::arch::x86_64::paging::phys_to_virt;
 
 const RSDP_SIG:  &[u8; 8] = b"RSD PTR ";

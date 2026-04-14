@@ -1,3 +1,10 @@
+/*
+* Copyright (c) 2026 Mohammad Muzamil
+*
+* This file is part of QunixOS, an operating system written in Rust.
+* It is licensed under the Apache License, Version 2.0.
+*/
+
 //! PS/2 keyboard driver with line-discipline integration.
 //!
 //! Tracks Shift, Ctrl, Alt modifier state.

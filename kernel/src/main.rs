@@ -1,3 +1,10 @@
+/*
+* Copyright (c) 2026 Mohammad Muzamil
+*
+* This file is part of QunixOS, an operating system written in Rust.
+* It is licensed under the Apache License, Version 2.0.
+*/
+
 #![no_std]
 #![no_main]
 #![feature(abi_x86_interrupt, alloc_error_handler, naked_functions, asm_const)]

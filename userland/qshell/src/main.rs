@@ -1,3 +1,10 @@
+/*
+* Copyright (c) 2026 Mohammad Muzamil
+*
+* This file is part of QunixOS, an operating system written in Rust.
+* It is licensed under the Apache License, Version 2.0.
+*/
+
 //! qsh v2.0 — Qunix Shell
 //! Modern, interactive, programmable shell for Qunix OS.
 //! Features: syntax highlighting, autosuggestions, context-aware completion,

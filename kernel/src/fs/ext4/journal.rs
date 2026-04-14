@@ -1,3 +1,10 @@
+/*
+* Copyright (c) 2026 Mohammad Muzamil
+*
+* This file is part of QunixOS, an operating system written in Rust.
+* It is licensed under the Apache License, Version 2.0.
+*/
+
 //! JBD2 (Journal Block Device 2) — write-ahead journaling for ext4.
 //!
 //! Real implementation, no stubs. Provides crash-safe metadata and data writes.

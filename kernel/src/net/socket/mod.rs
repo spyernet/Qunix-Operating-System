@@ -1,3 +1,10 @@
+/*
+* Copyright (c) 2026 Mohammad Muzamil
+*
+* This file is part of QunixOS, an operating system written in Rust.
+* It is licensed under the Apache License, Version 2.0.
+*/
+
 //! Socket layer — bridges POSIX socket API to kernel TCP/UDP/UNIX implementations.
 //!
 //! All send/recv paths are wired end-to-end. No stubs, no returning 0 for recv.

@@ -1,3 +1,10 @@
+/*
+* Copyright (c) 2026 Mohammad Muzamil
+*
+* This file is part of QunixOS, an operating system written in Rust.
+* It is licensed under the Apache License, Version 2.0.
+*/
+
 //! Qunix Security Foundation (QSF) — multi-layer kernel security subsystem.
 //!
 //! ## Layers (applied in order on every security-sensitive operation)

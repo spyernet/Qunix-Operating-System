@@ -1,3 +1,10 @@
+/*
+* Copyright (c) 2026 Mohammad Muzamil
+*
+* This file is part of QunixOS, an operating system written in Rust.
+* It is licensed under the Apache License, Version 2.0.
+*/
+
 //! ELF64 loader — supports static and dynamic (interpreter) binaries.
 //!
 //! For static binaries: load PT_LOAD segments, set up stack/auxv.

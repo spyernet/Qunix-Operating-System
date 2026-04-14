@@ -1,3 +1,10 @@
+/*
+* Copyright (c) 2026 Mohammad Muzamil
+*
+* This file is part of QunixOS, an operating system written in Rust.
+* It is licensed under the Apache License, Version 2.0.
+*/
+
 // perf_monitor — tracks scheduler ticks and context switches per CPU.
 //
 // Exposes data via the kernel log on disable and via the pre_syscall hook

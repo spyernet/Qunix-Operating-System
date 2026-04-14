@@ -1,3 +1,10 @@
+/*
+* Copyright (c) 2026 Mohammad Muzamil
+*
+* This file is part of QunixOS, an operating system written in Rust.
+* It is licensed under the Apache License, Version 2.0.
+*/
+
 // syscall_logger — logs every syscall number and issuing PID.
 //
 // This plugin hooks pre_syscall and writes a compact entry to the kernel

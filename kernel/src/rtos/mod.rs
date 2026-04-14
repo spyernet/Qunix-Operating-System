@@ -1,3 +1,10 @@
+/*
+* Copyright (c) 2026 Mohammad Muzamil
+*
+* This file is part of QunixOS, an operating system written in Rust.
+* It is licensed under the Apache License, Version 2.0.
+*/
+
 //! Qunix kernel RTOS primitives — SpinLock with backoff, Semaphore, RealTimeClock.
 //! SpinLock here adds exponential backoff; use spin::Mutex for the simple case.
 

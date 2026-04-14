@@ -1,3 +1,10 @@
+/*
+* Copyright (c) 2026 Mohammad Muzamil
+*
+* This file is part of QunixOS, an operating system written in Rust.
+* It is licensed under the Apache License, Version 2.0.
+*/
+
 use linked_list_allocator::LockedHeap;
 use crate::arch::x86_64::paging::{
     PageFlags, PageMapper, KERNEL_HEAP_START, KERNEL_HEAP_SIZE, PAGE_SIZE,

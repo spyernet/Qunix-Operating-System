@@ -1,3 +1,10 @@
+/*
+* Copyright (c) 2026 Mohammad Muzamil
+*
+* This file is part of QunixOS, an operating system written in Rust.
+* It is licensed under the Apache License, Version 2.0.
+*/
+
 use alloc::string::ToString;
 // Driver isolation host — the boundary between the Qunix kernel core and
 // loadable device drivers (including Linux-compatible drivers).

@@ -1,3 +1,10 @@
+/*
+* Copyright (c) 2026 Mohammad Muzamil
+*
+* This file is part of QunixOS, an operating system written in Rust.
+* It is licensed under the Apache License, Version 2.0.
+*/
+
 //! io_uring — async I/O with shared SQ/CQ rings.
 //! Full Linux 5.1+ compatible implementation.
 //! All 40 opcodes supported (synchronous execution, zero-copy ring sharing).

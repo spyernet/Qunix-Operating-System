@@ -23,7 +23,7 @@ echo "  Qunix OS Build Setup"
 echo "  ===================="
 echo ""
 
-# ── 1. Detect OS ────────────────────────────────────────────────────
+# 1. Detect OS
 if [ -f /etc/debian_version ] || [ -f /etc/ubuntu_version ]; then
     PKG_MGR="apt"
 elif [ -f /etc/arch-release ]; then
@@ -37,7 +37,7 @@ else
 fi
 info "Detected package manager: $PKG_MGR"
 
-# ── 2. System packages ───────────────────────────────────────────────
+# 2. System packages 
 info "Installing system dependencies..."
 case "$PKG_MGR" in
   apt)
@@ -78,7 +78,7 @@ case "$PKG_MGR" in
 esac
 ok "System packages installed"
 
-# ── 3. Rust toolchain ────────────────────────────────────────────────
+# 3. Rust toolchain
 if ! command -v rustup &>/dev/null; then
     info "Installing Rust via rustup..."
     curl https://sh.rustup.rs -sSf | sh -s -- -y
@@ -95,7 +95,7 @@ rustup target add x86_64-unknown-none
 rustup component add rust-src rustfmt clippy llvm-tools-preview
 ok "Rust nightly toolchain ready"
 
-# ── 4. Verify ────────────────────────────────────────────────────────
+# 4. Verify
 echo ""
 info "Verifying installation..."
 MISSING=0

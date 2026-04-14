@@ -1,3 +1,10 @@
+/*
+* Copyright (c) 2026 Mohammad Muzamil
+*
+* This file is part of QunixOS, an operating system written in Rust.
+* It is licensed under the Apache License, Version 2.0.
+*/
+
 pub const IA32_EFER: u32 = 0xC000_0080;
 pub const IA32_STAR: u32 = 0xC000_0081;
 pub const IA32_LSTAR: u32 = 0xC000_0082;

@@ -1,3 +1,10 @@
+/*
+* Copyright (c) 2026 Mohammad Muzamil
+*
+* This file is part of QunixOS, an operating system written in Rust.
+* It is licensed under the Apache License, Version 2.0.
+*/
+
 //! Framebuffer text console.
 //! Provides a scrolling terminal on the UEFI linear framebuffer.
 //! Used by the kernel logger and early userspace before a real terminal driver.

@@ -1,3 +1,10 @@
+/*
+* Copyright (c) 2026 Mohammad Muzamil
+*
+* This file is part of QunixOS, an operating system written in Rust.
+* It is licensed under the Apache License, Version 2.0.
+*/
+
 //! VGA text mode console (80x25, color text).
 //!
 //! The VGA buffer at physical 0xB8000 is accessible via phys_to_virt() once the
