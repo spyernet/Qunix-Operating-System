@@ -258,11 +258,7 @@ fn tty_echo(byte: u8) {
     crate::drivers::serial::write_byte(byte);
 }
 
-// ── Public API ─────────────────────────────────────────────────────────────
-
-/// Called by the keyboard IRQ handler when a byte arrives.
-/// Feeds it through the line discipline, optionally wakes readers.
-pub fn tty_input_byte(byte: u8) {
+fn handle_input_byte(byte: u8) {
     let signal_opt = TTY.lock().input_byte(byte);
 
     // Deliver signal to foreground process group
@@ -270,9 +266,33 @@ pub fn tty_input_byte(byte: u8) {
         let pgid = TTY.lock().foreground_pgid;
         crate::signal::send_signal_group(pgid, sig);
     }
+}
+
+// ── Public API ─────────────────────────────────────────────────────────────
+
+/// Called by the keyboard IRQ handler when a byte arrives.
+/// Feeds it through the line discipline, optionally wakes readers.
+pub fn tty_input_byte(byte: u8) {
+    handle_input_byte(byte);
 
     // Wake any readers
     tty_wake_readers();
+}
+
+/// Drain bytes from the serial RX FIFO into the TTY line discipline.
+///
+/// `run_qemu.sh` uses `-serial stdio`, so headless shells receive input over
+/// COM1 instead of the PS/2 keyboard path. Poll serial on the timer tick so
+/// `/dev/tty` behaves like the advertised keyboard+serial console.
+pub fn poll_input_devices() {
+    let mut saw_input = false;
+    while let Some(byte) = crate::drivers::serial::read_byte() {
+        saw_input = true;
+        handle_input_byte(byte);
+    }
+    if saw_input {
+        tty_wake_readers();
+    }
 }
 
 /// Wake all processes blocked in tty_read.
@@ -298,15 +318,44 @@ pub fn register_poll_waiter(pid: Pid) {
 pub fn tty_read(buf: *mut u8, count: usize, nonblock: bool) -> Result<usize, VfsError> {
     let slice = unsafe { core::slice::from_raw_parts_mut(buf, count) };
     loop {
+        let pid = crate::process::current_pid();
+
+        // Register as a waiter BEFORE checking for data.
+        //
+        // Lost-wakeup prevention: if we checked for data first and then
+        // registered, a keyboard IRQ could arrive in the window between
+        // the check (found nothing) and the registration.  The IRQ would
+        // call tty_wake_readers() on an empty list, deposit its byte, and
+        // then nobody would ever wake us again.
+        //
+        // By registering first, the IRQ is guaranteed to see our PID in the
+        // list, call wake_process() for us, and we will retry the read after
+        // waking — at which point the byte is in the buffer.
+        {
+            let mut readers = TTY_READERS.lock();
+            if !readers.contains(&pid) {
+                readers.push(pid);
+            }
+        }
+
+        // Now try to read.  If data is already available (typed before we
+        // blocked, or deposited by an IRQ between our registration and this
+        // check), consume it and remove our registration.
         if let Some(n) = TTY.lock().try_read(slice) {
+            TTY_READERS.lock().retain(|&p| p != pid);
             return Ok(n);
         }
-        if nonblock { return Err(crate::vfs::EAGAIN); }
-        // Register as waiter, then block
-        let pid = crate::process::current_pid();
-        TTY_READERS.lock().push(pid);
+
+        if nonblock {
+            TTY_READERS.lock().retain(|&p| p != pid);
+            return Err(crate::vfs::EAGAIN);
+        }
+
+        // Block.  The keyboard IRQ will call tty_wake_readers() →
+        // wake_process(pid) → set NEED_RESCHED → schedule() picks us back
+        // up on the next timer tick or immediately if we are the only task.
         crate::sched::block_current(crate::process::ProcessState::Sleeping);
-        // Woken by keyboard IRQ — retry
+        // Woken — retry from the top to re-register and re-check.
     }
 }
 
@@ -318,9 +367,17 @@ pub fn tty_write(buf: *const u8, count: usize) -> Result<usize, VfsError> {
         if onlcr && b == b'\n' {
             crate::drivers::vga::write_byte(b'\r');
             crate::drivers::serial::write_byte(b'\r');
+            if crate::drivers::gpu::console::is_ready() {
+                crate::drivers::gpu::console::write_char(b'\r');
+            }
         }
         crate::drivers::vga::write_byte(b);
         crate::drivers::serial::write_byte(b);
+        // Also route output to the GPU framebuffer console so the shell
+        // prompt and command output are visible on the 1280x800 display.
+        if crate::drivers::gpu::console::is_ready() {
+            crate::drivers::gpu::console::write_char(b);
+        }
     }
     Ok(count)
 }

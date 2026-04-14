@@ -20,6 +20,7 @@
 use alloc::collections::BTreeMap;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
+use core::arch::global_asm;
 use spin::Mutex;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use crate::process::{Pid, ProcessState, KERNEL_STACK_SIZE};
@@ -186,6 +187,30 @@ static RQS: [Mutex<Option<RunQueue>>; MAX_CPUS_SCHED] = {
 static NEED_RESCHED:  AtomicBool = AtomicBool::new(false);
 static SCHED_TICK_NS: AtomicU64  = AtomicU64::new(0);
 
+global_asm!(r#"
+.global qunix_context_switch
+qunix_context_switch:
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    mov [rdi], rsp
+    mov rsp, rsi
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
+    ret
+"#);
+
+unsafe extern "C" {
+    fn qunix_context_switch(from_rsp: *mut u64, to_rsp: u64);
+}
+
 pub fn init() {
     // Initialize per-CPU run queue for CPU 0 (BSP)
     *RQS[0].lock() = Some(RunQueue::new(0));
@@ -308,12 +333,42 @@ pub fn schedule() {
         if next_pid != current {
             switch_to(current, next_pid);
         }
+        return;
     }
 
     // Try work-stealing from other CPUs if we have nothing to run
-    else {
-        if let Some(stolen) = work_steal(cpu) {
-            switch_to(current, stolen);
+    if let Some(stolen) = work_steal(cpu) {
+        switch_to(current, stolen);
+        return;
+    }
+
+    // No runnable task found.  If the current process is blocked/sleeping
+    // (e.g. it just called block_current() and there is no other runnable
+    // process), we must NOT simply return — that would spin the blocked
+    // process in a tight loop with interrupts potentially disabled, so the
+    // keyboard / timer IRQ that would eventually unblock it can never fire.
+    //
+    // Solution: enable interrupts and HLT until the next IRQ wakes us up.
+    // The IRQ handler will call wake_process() + set NEED_RESCHED, and
+    // schedule() will be called again to pick the now-runnable task.
+    let current_blocked = crate::process::with_process(current, |p| {
+        matches!(p.state, ProcessState::Sleeping | ProcessState::Stopped | ProcessState::Zombie(_))
+    }).unwrap_or(false);
+
+    if current_blocked {
+        loop {
+            // Check whether any task became runnable (e.g. keyboard IRQ ran)
+            let has_work = RQS[cpu].lock().as_ref()
+                .map(|rq| rq.nr_running > 0)
+                .unwrap_or(false);
+            if has_work || NEED_RESCHED.load(Ordering::Acquire) {
+                NEED_RESCHED.store(true, Ordering::Release);
+                break;
+            }
+            // Enable interrupts and wait for the next IRQ, then re-check.
+            unsafe {
+                core::arch::asm!("sti; hlt; cli", options(nomem, nostack));
+            }
         }
     }
 }
@@ -421,30 +476,7 @@ unsafe fn context_switch(from: Pid, to: Pid) {
     };
 
     if from_rsp_ptr.is_null() { return; }
-
-    core::arch::asm!(
-        // Save callee-saved registers onto current kernel stack
-        "push rbx",
-        "push rbp",
-        "push r12",
-        "push r13",
-        "push r14",
-        "push r15",
-        // Save current RSP into from->context.rsp
-        "mov [{from_rsp}], rsp",
-        // Switch to to->context.rsp
-        "mov rsp, {to_rsp}",
-        // Restore callee-saved registers from new stack
-        "pop r15",
-        "pop r14",
-        "pop r13",
-        "pop r12",
-        "pop rbp",
-        "pop rbx",
-        from_rsp = in(reg) from_rsp_ptr,
-        to_rsp   = in(reg) to_rsp,
-        options(nostack)
-    );
+    qunix_context_switch(from_rsp_ptr, to_rsp);
 }
 
 pub fn yield_current() {
@@ -459,14 +491,22 @@ pub fn block_current(new_state: crate::process::ProcessState) {
     crate::process::with_process_mut(pid, |p| {
         p.state = new_state;
     });
-    // Remove from the run queue so the scheduler doesn't pick it up
-    remove_task(pid);
+    // The current task is executing on CPU, not sitting in a run queue entry.
+    // Keep its scheduler entity intact so wake_process() can re-enqueue it later.
     // Force a handoff now that the current task has blocked.
-    // Without this, callers like wait4()/tty_read() can remove themselves
-    // from the run queue and then keep executing until the next timer tick.
     NEED_RESCHED.store(true, Ordering::Release);
-    // Yield to the next runnable process
+    // Yield to the next runnable process (or HLT if none)
     schedule();
+    // When we resume here — either via a context-switch-back or because
+    // schedule() found no other task and returned after an IRQ woke us —
+    // the process state must be Running again.  If it is still Sleeping
+    // (e.g. wake_process set it to Runnable but no actual switch occurred),
+    // fix it up so the scheduler can account for this task correctly.
+    crate::process::with_process_mut(pid, |p| {
+        if matches!(p.state, ProcessState::Sleeping | ProcessState::Runnable) {
+            p.state = ProcessState::Running;
+        }
+    });
 }
 
 /// Force an immediate reschedule — used after marking a process as zombie
@@ -510,12 +550,16 @@ pub fn wake_process(pid: Pid) {
             p.state = ProcessState::Runnable;
             true
         } else {
-            // Not sleeping: may be Stopped (use add_task), Runnable, Running,
-            // or Zombie. None of these need re-enqueueing here.
             false
         }
     }).unwrap_or(false);
-    if was_sleeping { enqueue(pid); }
+    if was_sleeping {
+        enqueue(pid);
+        // Signal the scheduler to pick up this newly-runnable task.
+        // Without this, schedule() returns early (NEED_RESCHED=false)
+        // and the woken process is never switched to.
+        NEED_RESCHED.store(true, Ordering::Release);
+    }
 }
 
 pub fn nr_running() -> usize {

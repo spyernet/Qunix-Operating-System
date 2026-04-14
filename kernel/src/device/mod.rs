@@ -100,16 +100,21 @@ fn dev_console_write(buf: *const u8, count: usize, _offset: u64) -> Result<usize
 
 fn dev_serial_read(buf: *mut u8, count: usize, _offset: u64) -> Result<usize, VfsError> {
     let mut read = 0;
-    while read < count {
-        match crate::drivers::serial::read_byte() {
-            Some(b) => {
-                unsafe { *buf.add(read) = b; }
-                read += 1;
+    loop {
+        while read < count {
+            match crate::drivers::serial::read_byte() {
+                Some(b) => {
+                    unsafe { *buf.add(read) = b; }
+                    read += 1;
+                }
+                None => break,
             }
-            None => break,
         }
+        if read > 0 {
+            return Ok(read);
+        }
+        crate::sched::yield_current();
     }
-    Ok(read)
 }
 
 fn dev_serial_write(buf: *const u8, count: usize, _offset: u64) -> Result<usize, VfsError> {

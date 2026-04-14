@@ -1913,6 +1913,18 @@ fn signum(name: &str) -> Option<i32> {
         "WINCH"|"28"=>Some(SIGWINCH), _=>name.parse().ok(),
     }
 }
+fn resolve_path(&self, cmd: &str) -> Option<String> {
+    if cmd.contains('/') {
+        let mut p = cmd.to_string(); p.push('\0');
+        let mut st = Stat::default();
+        if stat(p.as_bytes(), &mut st) >= 0 && st.st_mode & 0o111 != 0 {
+            return Some(cmd.to_string());
+        }
+        return None;
+    }
+    path_find(cmd, self.env.get("PATH").map(|s| s.as_str()).unwrap_or(""))
+}
+
 fn path_find(cmd: &str, path_env: &str) -> Option<String> {
     for dir in path_env.split(':') {
         let full=alloc::format!("{}/{}\0",dir,cmd);

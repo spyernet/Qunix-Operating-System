@@ -62,5 +62,5 @@ pub static PLUGIN_ENTRY: PluginEntry = PluginEntry::new(
         desc:    "Logs syscall numbers and PIDs via kernel debug output",
     },
     &INSTANCE,
-    true, // enabled at boot by default
+    false, // disabled at boot by default to avoid flooding console
 );

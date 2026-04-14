@@ -9,10 +9,12 @@
 //! not be active during loading.
 
 use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
 use crate::memory::vmm::{AddressSpace, Prot, RegionKind, VmaRegion};
 use crate::arch::x86_64::paging::{PageFlags, PageMapper, PAGE_SIZE, phys_to_virt};
 use crate::memory::phys::alloc_frame;
+use crate::vfs::FileDescriptor;
 
 // ELF header constants
 const ELFMAG:   &[u8] = b"\x7fELF";
@@ -41,6 +43,9 @@ const INTERP_BASE:     u64 = 0x0000_7FFF_0000_0000; // dynamic linker load base
 pub struct ExecResult {
     pub entry:          u64,
     pub stack_top:      u64,
+    pub argc:           u64,
+    pub argv_ptr:       u64,
+    pub envp_ptr:       u64,
     pub address_space:  AddressSpace,
     pub phdr_addr:      u64,   // user-space address of phdrs
     pub phdr_count:     u64,
@@ -50,6 +55,49 @@ pub struct ExecResult {
     pub tls_filesz:     u64,
     pub tls_memsz:      u64,
     pub tls_align:      u64,
+}
+
+trait ElfSource {
+    fn len(&self) -> u64;
+    fn read_exact(&self, offset: u64, buf: &mut [u8]) -> Result<(), u32>;
+}
+
+struct SliceSource<'a> {
+    data: &'a [u8],
+}
+
+impl ElfSource for SliceSource<'_> {
+    fn len(&self) -> u64 {
+        self.data.len() as u64
+    }
+
+    fn read_exact(&self, offset: u64, buf: &mut [u8]) -> Result<(), u32> {
+        let start = offset as usize;
+        let end = start.checked_add(buf.len()).ok_or(crate::vfs::EINVAL)?;
+        if end > self.data.len() {
+            return Err(crate::vfs::EINVAL);
+        }
+        buf.copy_from_slice(&self.data[start..end]);
+        Ok(())
+    }
+}
+
+struct FdSource<'a> {
+    fd: &'a FileDescriptor,
+}
+
+impl ElfSource for FdSource<'_> {
+    fn len(&self) -> u64 {
+        self.fd.inode.size
+    }
+
+    fn read_exact(&self, offset: u64, buf: &mut [u8]) -> Result<(), u32> {
+        match self.fd.inode.ops.read(&self.fd.inode, buf, offset) {
+            Ok(n) if n == buf.len() => Ok(()),
+            Ok(_) => Err(crate::vfs::EIO),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 /// Parse an ELF64 header and return (type, entry, phoff, phentsize, phnum, shoff).
@@ -81,9 +129,6 @@ fn parse_elf64_header(data: &[u8]) -> Option<(u16, u64, u64, u16, u16, u64)> {
 
     // Sanity: phentsize must be at least 56 bytes for a valid ELF64 phdr
     if e_phnum > 0 && (e_phentsize as usize) < 56 { return None; }
-    // Sanity: phoff must be within file
-    if e_phnum > 0 && e_phoff as usize >= data.len() { return None; }
-
     Some((e_type, e_entry, e_phoff, e_phentsize, e_phnum, e_shoff))
 }
 
@@ -114,6 +159,36 @@ fn parse_phdr(data: &[u8], off: usize) -> Option<PhSegment> {
     })
 }
 
+fn read_small_vec<S: ElfSource>(source: &S, offset: u64, len: usize) -> Result<Vec<u8>, u32> {
+    let end = offset.checked_add(len as u64).ok_or(crate::vfs::EINVAL)?;
+    if end > source.len() {
+        return Err(crate::vfs::EINVAL);
+    }
+    let mut buf = vec![0u8; len];
+    source.read_exact(offset, &mut buf)?;
+    Ok(buf)
+}
+
+fn load_phdrs<S: ElfSource>(source: &S, e_phoff: u64, e_phentsize: u16, e_phnum: u16) -> Result<Vec<PhSegment>, u32> {
+    let table_bytes = (e_phentsize as usize)
+        .checked_mul(e_phnum as usize)
+        .ok_or(crate::vfs::EINVAL)?;
+    let table_end = e_phoff
+        .checked_add(table_bytes as u64)
+        .ok_or(crate::vfs::EINVAL)?;
+    if table_end > source.len() {
+        return Err(crate::vfs::EINVAL);
+    }
+
+    let raw = read_small_vec(source, e_phoff, table_bytes)?;
+    let mut phdrs = Vec::with_capacity(e_phnum as usize);
+    for i in 0..e_phnum as usize {
+        let off = i * e_phentsize as usize;
+        phdrs.push(parse_phdr(&raw, off).ok_or(crate::vfs::EINVAL)?);
+    }
+    Ok(phdrs)
+}
+
 fn flags_to_prot(flags: u32) -> Prot {
     let mut p = Prot::empty();
     if flags & PF_R != 0 { p |= Prot::READ; }
@@ -132,8 +207,8 @@ fn prot_to_page_flags(prot: Prot) -> PageFlags {
 /// Load ELF segments into an address space.
 /// `load_bias` is added to all virtual addresses (0 for static, chosen base for PIE).
 /// Returns (adjusted_entry, max_load_end, phdr_user_addr).
-fn load_segments(
-    data: &[u8],
+fn load_segments<S: ElfSource>(
+    source: &S,
     space: &mut AddressSpace,
     load_bias: u64,
     e_phoff: u64, e_phentsize: u16, e_phnum: u16,
@@ -146,9 +221,8 @@ fn load_segments(
     let mut tls_memsz   = 0u64;
     let mut tls_align   = 0u64;
 
-    for i in 0..e_phnum as usize {
-        let off = e_phoff as usize + i * e_phentsize as usize;
-        let ph  = parse_phdr(data, off).ok_or(crate::vfs::EINVAL)?;
+    let phdrs = load_phdrs(source, e_phoff, e_phentsize, e_phnum)?;
+    for ph in phdrs {
 
         match ph.p_type {
             PT_PHDR => {
@@ -203,27 +277,32 @@ fn load_segments(
 
                 // Copy file data through physical addresses
                 if ph.p_filesz > 0 {
-                    let src_off = ph.p_offset as usize;
-                    let src_end = src_off + ph.p_filesz as usize;
-                    if src_end <= data.len() {
-                        let mut virt_cursor = ph.p_vaddr + load_bias;
-                        let mut copied = 0usize;
-                        let to_copy    = ph.p_filesz as usize;
-                        while copied < to_copy {
-                            let pg_idx  = ((virt_cursor - vaddr_page) / PAGE_SIZE) as usize;
-                            let pg_off  = (virt_cursor & (PAGE_SIZE - 1)) as usize;
-                            let can     = (PAGE_SIZE as usize - pg_off).min(to_copy - copied);
-                            let frame_v = phys_to_virt(frames[pg_idx]);
-                            unsafe {
-                                core::ptr::copy_nonoverlapping(
-                                    data.as_ptr().add(src_off + copied),
-                                    (frame_v + pg_off as u64) as *mut u8,
-                                    can,
-                                );
-                            }
-                            copied        += can;
-                            virt_cursor   += can as u64;
+                    let src_end = ph.p_offset
+                        .checked_add(ph.p_filesz)
+                        .ok_or(crate::vfs::EINVAL)?;
+                    if src_end > source.len() {
+                        return Err(crate::vfs::EINVAL);
+                    }
+
+                    let mut scratch = [0u8; PAGE_SIZE as usize];
+                    let mut virt_cursor = ph.p_vaddr + load_bias;
+                    let mut copied = 0usize;
+                    let to_copy = ph.p_filesz as usize;
+                    while copied < to_copy {
+                        let pg_idx = ((virt_cursor - vaddr_page) / PAGE_SIZE) as usize;
+                        let pg_off = (virt_cursor & (PAGE_SIZE - 1)) as usize;
+                        let can = (PAGE_SIZE as usize - pg_off).min(to_copy - copied);
+                        source.read_exact(ph.p_offset + copied as u64, &mut scratch[..can])?;
+                        let frame_v = phys_to_virt(frames[pg_idx]);
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(
+                                scratch.as_ptr(),
+                                (frame_v + pg_off as u64) as *mut u8,
+                                can,
+                            );
                         }
+                        copied += can;
+                        virt_cursor += can as u64;
                     }
                 }
 
@@ -244,32 +323,29 @@ fn load_segments(
     Ok((entry, max_load_end, phdr_user, tls_addr, tls_filesz, tls_memsz, tls_align, load_bias))
 }
 
-/// Main ELF exec entry point.
-pub fn exec(data: Vec<u8>, argv: Vec<String>, envp: Vec<String>) -> Result<ExecResult, u32> {
-    crate::klog!("ELF: exec start ({} bytes)", data.len());
+fn exec_inner<S: ElfSource>(source: &S, argv: &[String], envp: &[String]) -> Result<ExecResult, u32> {
+    crate::klog!("ELF: exec start ({} bytes)", source.len());
+
+    let header = read_small_vec(source, 0, 64)?;
     let (e_type, e_entry, e_phoff, e_phentsize, e_phnum, _) =
-        parse_elf64_header(&data).ok_or(crate::vfs::EINVAL)?;
+        parse_elf64_header(&header).ok_or(crate::vfs::EINVAL)?;
 
     if e_type != ET_EXEC && e_type != ET_DYN {
         return Err(crate::vfs::EINVAL);
     }
     if e_phentsize < 56 { return Err(crate::vfs::EINVAL); }
 
+    let phdrs = load_phdrs(source, e_phoff, e_phentsize, e_phnum)?;
+
     // Check for interpreter (dynamic linker)
     let mut interp_path: Option<String> = None;
-    for i in 0..e_phnum as usize {
-        let off = e_phoff as usize + i * e_phentsize as usize;
-        if let Some(ph) = parse_phdr(&data, off) {
-            if ph.p_type == PT_INTERP && ph.p_filesz > 1 {
-                let start = ph.p_offset as usize;
-                let end   = start + ph.p_filesz as usize - 1; // trim NUL
-                if end <= data.len() {
-                    interp_path = Some(
-                        String::from_utf8_lossy(&data[start..end]).into_owned()
-                    );
-                }
-                break;
-            }
+    for ph in &phdrs {
+        if ph.p_type == PT_INTERP && ph.p_filesz > 1 {
+            let interp = read_small_vec(source, ph.p_offset, ph.p_filesz as usize)?;
+            interp_path = Some(
+                String::from_utf8_lossy(&interp[..interp.len().saturating_sub(1)]).into_owned()
+            );
+            break;
         }
     }
 
@@ -294,26 +370,27 @@ pub fn exec(data: Vec<u8>, argv: Vec<String>, envp: Vec<String>) -> Result<ExecR
 
     // Load main executable
     let (entry, max_load_end, phdr_user, tls_addr, tls_filesz, tls_memsz, tls_align, _) =
-        load_segments(&data, &mut space, load_bias,
+        load_segments(source, &mut space, load_bias,
                       e_phoff, e_phentsize, e_phnum, e_entry)?;
     crate::klog!("ELF: main image loaded entry={:#x} brk={:#x}", entry, max_load_end);
 
     // Load interpreter if present
     let (at_base, final_entry) = if let Some(ref ipath) = interp_path {
-        // Load interpreter from VFS
-        let cwd = crate::process::with_current(|p| p.get_cwd()).unwrap_or_else(|| alloc::string::String::from("/"));
+        let cwd = crate::process::with_current(|p| p.get_cwd())
+            .unwrap_or_else(|| alloc::string::String::from("/"));
         let interp_fd = crate::vfs::open(&cwd, ipath, crate::vfs::O_RDONLY, 0)
             .map_err(|_| crate::vfs::ENOENT)?;
-        let mut interp_data = Vec::new();
-        crate::vfs::read_all_fd(&interp_fd, &mut interp_data);
-        if interp_data.len() < 64 { return Err(crate::vfs::ENOENT); }
+        let interp_source = FdSource { fd: &interp_fd };
+        if interp_source.len() < 64 {
+            return Err(crate::vfs::ENOENT);
+        }
 
-        let (it, ie, iphoff, iphentsz, iphnum, _) =
-            parse_elf64_header(&interp_data).ok_or(crate::vfs::EINVAL)?;
+        let interp_header = read_small_vec(&interp_source, 0, 64)?;
+        let (_it, ie, iphoff, iphentsz, iphnum, _) =
+            parse_elf64_header(&interp_header).ok_or(crate::vfs::EINVAL)?;
 
-        // Load interpreter at INTERP_BASE
         let (interp_entry, _, _, _, _, _, _, _) =
-            load_segments(&interp_data, &mut space, INTERP_BASE,
+            load_segments(&interp_source, &mut space, INTERP_BASE,
                           iphoff, iphentsz, iphnum, ie)?;
 
         (INTERP_BASE, interp_entry)
@@ -360,6 +437,9 @@ pub fn exec(data: Vec<u8>, argv: Vec<String>, envp: Vec<String>) -> Result<ExecR
         phdr_user, e_phentsize as u64, e_phnum as u64,
         at_base, tls_addr,
     );
+    let argc = argv.len() as u64;
+    let argv_ptr = stack_top + 8;
+    let envp_ptr = argv_ptr + (argc + 1) * 8;
     crate::klog!("ELF: user stack ready rsp={:#x}", stack_top);
 
     space.brk       = max_load_end;
@@ -375,16 +455,12 @@ pub fn exec(data: Vec<u8>, argv: Vec<String>, envp: Vec<String>) -> Result<ExecR
     }
     crate::klog!("ELF: exec result ready mmap_base={:#x}", space.mmap_base);
 
-    // The current kernel heap path is still fragile on larger frees/reallocations
-    // during early boot. Keep the parsed exec inputs alive for now so exec can
-    // hand control to userspace instead of dying during drop.
-    core::mem::forget(data);
-    core::mem::forget(argv);
-    core::mem::forget(envp);
-
     Ok(ExecResult {
         entry: final_entry,
         stack_top,
+        argc,
+        argv_ptr,
+        envp_ptr,
         address_space: space,
         phdr_addr:    phdr_user,
         phdr_count:   e_phnum as u64,
@@ -392,6 +468,24 @@ pub fn exec(data: Vec<u8>, argv: Vec<String>, envp: Vec<String>) -> Result<ExecR
         at_base,
         tls_addr, tls_filesz, tls_memsz, tls_align,
     })
+}
+
+/// Main ELF exec entry point.
+pub fn exec(data: Vec<u8>, argv: Vec<String>, envp: Vec<String>) -> Result<ExecResult, u32> {
+    let source = SliceSource { data: &data };
+    let result = exec_inner(&source, &argv, &envp)?;
+
+    // The current kernel heap path is still fragile on larger frees/reallocations
+    // during early boot. Keep the raw ELF image alive for now so exec can hand
+    // control to userspace instead of dying during drop.
+    core::mem::forget(data);
+
+    Ok(result)
+}
+
+pub fn exec_fd(fd: &FileDescriptor, argv: Vec<String>, envp: Vec<String>) -> Result<ExecResult, u32> {
+    let source = FdSource { fd };
+    exec_inner(&source, &argv, &envp)
 }
 
 fn write_phys(frames: &[u64], stack_base: u64, vaddr: u64, val: u64) {
@@ -565,24 +659,37 @@ fn setup_stack(
     sp
 }
 
-pub unsafe fn exec_usermode_noreturn(entry: u64, stack: u64) -> ! {
+pub unsafe fn exec_usermode_noreturn(entry: u64, stack: u64, argc: u64, argv: u64, envp: u64) -> ! {
     use crate::arch::x86_64::gdt::{USER_CODE_SEL, USER_DATA_SEL};
+    use crate::arch::x86_64::msr::{self, IA32_GSBASE, IA32_KERNEL_GSBASE};
+
+    // The initial boot path keeps both GS MSRs pointing at percpu state.
+    // execve enters here from syscall context, where swapgs may have left
+    // IA32_KERNEL_GSBASE holding the prior user GS value. The rest of the
+    // kernel's interrupt/syscall entry paths assume the two are in sync.
+    let kernel_gs = msr::read(IA32_GSBASE);
+    msr::write(IA32_GSBASE, kernel_gs);
+    msr::write(IA32_KERNEL_GSBASE, kernel_gs);
+
     core::arch::asm!(
-        "mov ax, {uds}",   // removed :x modifier (not allowed for const)
+        "mov ax, {uds}",
         "mov ds, ax", "mov es, ax",
         "push {uds}",
-        "push {rsp}",
+        "push r8",
         "pushfq",
         "pop  rax",
         "or   rax, 0x200",
         "push rax",
         "push {ucs}",
-        "push {rip}",
+        "push r9",
         "iretq",
         uds = const USER_DATA_SEL as u64,
         ucs = const USER_CODE_SEL as u64,
-        rsp = in(reg) stack,
-        rip = in(reg) entry,
+        in("rdi") argc,
+        in("rsi") argv,
+        in("rdx") envp,
+        in("r8") stack,
+        in("r9") entry,
         options(noreturn)
     );
 }

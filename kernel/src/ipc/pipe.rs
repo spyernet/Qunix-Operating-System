@@ -197,20 +197,35 @@ pub fn pipe_read(
     let slice = unsafe { core::slice::from_raw_parts_mut(buf, count) };
 
     loop {
+        let pid = crate::process::current_pid();
+
+        // Register as a reader waiter BEFORE checking — prevents lost wakeup
+        // if a writer completes between the try_read check and the block.
+        register_reader_waiter(pipe, pid);
+
         let result = pipe.lock().try_read(slice);
         match result {
             Ok(n) => {
-                // Woke a writer: space freed in buffer
+                // Remove our waiter registration since we got data.
+                {
+                    let k = pipe_key(pipe);
+                    let mut wq = PIPE_WAITERS.lock();
+                    if let Some(entry) = wq.get_mut(&k) {
+                        entry.0.retain(|&p| p != pid);
+                    }
+                }
                 if n > 0 { wake_writers(pipe); }
                 return Ok(n);
             }
             Err(EAGAIN) => {
-                if nonblock { return Err(EAGAIN); }
-                // Register as waiter, then block
-                let pid = crate::process::current_pid();
-                register_reader_waiter(pipe, pid);
+                if nonblock {
+                    let k = pipe_key(pipe);
+                    PIPE_WAITERS.lock().get_mut(&k).map(|e| e.0.retain(|&p| p != pid));
+                    return Err(EAGAIN);
+                }
+                // Block — writer will call wake_readers() → wake_process(pid)
                 crate::sched::block_current(crate::process::ProcessState::Sleeping);
-                // Woken by a writer — retry
+                // Woken — retry from top (re-register + re-check)
             }
             Err(e) => return Err(e),
         }

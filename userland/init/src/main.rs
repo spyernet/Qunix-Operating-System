@@ -5,6 +5,9 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use libsys::*;
 
+const TIOCSCTTY: u64 = 0x540E;
+const TIOCSPGRP: u64 = 0x5410;
+
 
 fn args(argc: u64, argv: *const *const u8) -> Vec<String> {
     (0..argc as usize).map(|i| unsafe {
@@ -23,6 +26,20 @@ fn rdfile(p: &str) -> String {
     let mut pa = p.to_string(); pa.push('\0');
     let fd = open(pa.as_bytes(), O_RDONLY, 0); if fd < 0 { return String::new(); }
     let s = rdall(fd as i32); close(fd as i32); s
+}
+
+fn attach_console(console: &[u8]) {
+    let fd = open(console, O_RDWR | O_NOCTTY, 0);
+    if fd < 0 { return; }
+
+    let _ = ioctl(fd as i32, TIOCSCTTY, 0);
+    let pgid = getpid() as u32;
+    let _ = ioctl(fd as i32, TIOCSPGRP, &pgid as *const u32 as u64);
+
+    dup2(fd as i32, STDIN);
+    dup2(fd as i32, STDOUT);
+    dup2(fd as i32, STDERR);
+    if fd > 2 { close(fd as i32); }
 }
 
 #[no_mangle] #[link_section = ".text._start"]
@@ -67,10 +84,10 @@ pub extern "C" fn _start() -> ! {
     // Start getty/shell on console
     wstr("Starting shell...\n");
 
-    // Qunix currently exposes a single software TTY wired to VGA+serial as
-    // /dev/tty. Launch the boot shell there so run_qemu.sh can see it.
-    let consoles = [b"/dev/tty\0"];
-    let mut pids = [0i64; 1];
+    // Default consoles: prefer the graphical TTY if present, otherwise
+    // fall back to the serial device used by headless setups.
+    let consoles = [b"/dev/tty\0", b"/dev/serial\0"];
+    let mut pids = [0i64; 2];
     for (idx, console) in consoles.iter().enumerate() {
         let pid = fork();
         if pid == 0 {
@@ -80,18 +97,9 @@ pub extern "C" fn _start() -> ! {
             // init's session and open(/dev/tty) would make it the controlling
             // terminal immediately — then tty_read() blocks on the first read
             // before qshell even starts.
-            setsid();
-            // Open console with O_NOCTTY: we get an fd but do NOT acquire it
-            // as a controlling terminal yet. qshell will call setsid()+ioctl
-            // itself when it wants line discipline ownership.
-            let fd = open(*console, O_RDWR | O_NOCTTY, 0);
-            if fd >= 0 {
-                dup2(fd as i32, STDIN);
-                dup2(fd as i32, STDOUT);
-                dup2(fd as i32, STDERR);
-                if fd > 2 { close(fd as i32); }
-            }
-            wstr("init: launching qshell on /dev/tty\n");
+            let _ = setsid();
+            attach_console(*console);
+            wstr("init: launching qshell on console\n");
             // Exec shell
             let shell_argv: [*const u8; 3] = [
                 b"/bin/qsh\0".as_ptr(), b"-i\0".as_ptr(), core::ptr::null()
@@ -118,11 +126,9 @@ pub extern "C" fn _start() -> ! {
                 if sp as i32 == pid {
                     let new_pid = fork();
                     if new_pid == 0 {
-                        let console = consoles[idx];
-                        setsid();
-                        let fd = open(console, O_RDWR | O_NOCTTY, 0);
-                        if fd >= 0 { dup2(fd as i32,STDIN); dup2(fd as i32,STDOUT); dup2(fd as i32,STDERR); if fd>2{close(fd as i32);} }
-                        wstr("init: restarting qshell on /dev/tty\n");
+                        let _ = setsid();
+                        attach_console(consoles[idx]);
+                        wstr("init: restarting qshell on console\n");
                         let shell_argv: [*const u8; 2] = [b"/bin/qsh\0".as_ptr(), core::ptr::null()];
                         let env_arr: [*const u8; 2] = [b"PATH=/bin:/sbin:/usr/bin\0".as_ptr(), core::ptr::null()];
                         execve(b"/bin/qsh\0", &shell_argv, &env_arr);
