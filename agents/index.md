@@ -76,14 +76,14 @@ Prompt example:
 
 ---
 
-## 3.3 ENGINE-FAMILY.md
+## 3.3 OTHERS.md
 Use when:
 - You need multi-agent reasoning (architecture + testing + building)
 - Complex systems requiring validation and consensus
 - Large distributed or OS-scale systems
 
 Prompt example:
-> "Use ./agents/others.md. Design and implement full OS scheduler with multi-core support."
+> "Use ./agents/OTHERS.md. Design and implement full OS scheduler with multi-core support."
 
 ---
 
@@ -125,7 +125,7 @@ If you want to enable these frameworks in your own project:
    - CLAUDE.md
    - CODEX.md
    - OTHERS.md
-   - INDEX.md
+   - index.md
 
 2. Reference them explicitly in prompts to your AI coding assistant.
 

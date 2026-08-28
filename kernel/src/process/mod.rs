@@ -179,8 +179,11 @@ impl Process {
         crate::drivers::serial::write_str("[new_kernel] pre-address-space\n");
         let address_space = AddressSpace::new_kernel();
         crate::drivers::serial::write_str("[new_kernel] post-address-space\n");
+        crate::drivers::serial::write_str("[new_kernel] pre-fds\n");
         let fds = BTreeMap::new();
+        crate::drivers::serial::write_str("[new_kernel] pre-cwd\n");
         let cwd = String::from("/");
+        crate::drivers::serial::write_str("[new_kernel] pre-root\n");
         let root = String::from("/");
         crate::drivers::serial::write_str("[new_kernel] post-paths\n");
         let groups = Vec::new();

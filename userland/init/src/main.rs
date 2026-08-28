@@ -93,7 +93,7 @@ pub extern "C" fn _start() -> ! {
 
     // Default consoles: prefer the graphical TTY if present, otherwise
     // fall back to the serial device used by headless setups.
-    let consoles = [b"/dev/tty\0", b"/dev/serial\0"];
+    let consoles: [&[u8]; 2] = [b"/dev/tty\0".as_slice(), b"/dev/serial\0".as_slice()];
     let mut pids = [0i64; 2];
     for (idx, console) in consoles.iter().enumerate() {
         let pid = fork();

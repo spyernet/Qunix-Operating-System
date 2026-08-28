@@ -403,11 +403,12 @@ pub fn sys_chdir(path: u64) -> i64 {
 }
 
 pub fn sys_fchdir(fd: i32) -> i64 {
-    let inode = process::with_current(|p| p.get_fd(fd as u32).map(|f| (f.inode.clone(), f.inode.mode)));
-    match inode.flatten() {
-        Some((ino, mode)) => {
-            if !vfs::s_isdir(mode) { return -(vfs::ENOTDIR as i64); }
-            // TODO: reconstruct path from inode
+    let fd_obj = process::with_current(|p| p.get_fd(fd as u32));
+    match fd_obj.flatten() {
+        Some(f) => {
+            if !vfs::s_isdir(f.inode.mode) { return -(vfs::ENOTDIR as i64); }
+            if f.path.is_empty() { return -(vfs::ENOENT as i64); }
+            process::with_current_mut(|proc| proc.set_cwd(f.path.clone()));
             0
         }
         None => EBADF,

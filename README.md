@@ -1,4 +1,9 @@
 ![OS logo](logos/logo.png)
+
+<p align="center">
+  <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&size=26&duration=2500&pause=800&color=00F5FF&center=true&vCenter=true&width=700&lines=Meet+QunixOS;Yes%2C+it+is+faster;Built+for+performance;Rust-powered+kernel;Blazing+fast+boot;Optimized+scheduler;Zero+bloat+design;Modern+Unix+reimagined;Multi-core+ready;Fast.+Stable.+Clean.;Your+next+OS" />
+</p>
+
 # Qunix OS
 
 A Unix-like operating system written in Rust for everyone.

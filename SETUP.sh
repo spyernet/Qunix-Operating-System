@@ -45,8 +45,8 @@ case "$PKG_MGR" in
     sudo apt-get install -y \
       lld llvm binutils \
       mtools xorriso dosfstools \
-      qemu-system-x86_64 qemu-utils \
-      curl git make nasm
+      qemu-system qemu-utils \
+      curl git make nasm fdisk
     ;;
   pacman)
     sudo pacman -Syu --noconfirm \
@@ -119,3 +119,10 @@ else
     warn "$MISSING tool(s) missing. Check output above."
     exit 1
 fi
+
+rustup toolchain install nightly-2023-12-01
+rustup component add rust-src --toolchain nightly-2023-12-01
+rustup target add x86_64-unknown-uefi --toolchain nightly-2023-12-01
+
+echo 'source "$HOME/.cargo/env"' >> ~/.bashrc
+source ~/.bashrc

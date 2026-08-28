@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Qunix OS Build System v5.0
+# Qunix OS Build System v0.2
 # Usage: ./build.sh [bin|iso|run|clean|kernel|userland|plugins|check|help]
 
 set -e
@@ -253,6 +253,7 @@ build_userland() {
     mkdir -p "$userland_target"
 
     local failed=0 built=0
+    local failed_names=()
 
     for dir_name in "${USERLAND_DIRS[@]}"; do
         local src_dir="$USERLAND_SRC/$dir_name"
@@ -305,10 +306,12 @@ build_userland() {
             else
                 warn "No executable produced: $dir_name"
                 failed=$((failed+1))
+                failed_names+=("$dir_name")
             fi
         else
             warn "Failed to build: $dir_name"
             failed=$((failed+1))
+            failed_names+=("$dir_name")
         fi
     done
 
@@ -323,7 +326,11 @@ build_userland() {
     # Populate /etc
     populate_etc "$rootfs"
 
-    success "Userland: $built built, $failed failed"
+    if [ "$failed" -gt 0 ]; then
+        success "Userland: $built built, $failed failed — failed: ${failed_names[*]}"
+    else
+        success "Userland: $built built, $failed failed"
+    fi
 }
 
 populate_etc() {
@@ -344,24 +351,16 @@ qunix
 EOF
     cat > "$rootfs/etc/os-release" << 'EOF'
 NAME="Qunix"
-VERSION="5.0"
+VERSION="0.2"
 ID=qunix
-PRETTY_NAME="Qunix OS 5.0"
-VERSION_ID="5.0"
-BUILD_ID=v5
+PRETTY_NAME="Qunix OS 0.2"
+VERSION_ID="0.2"
+BUILD_ID=v0.2
 ANSI_COLOR="1;32"
 EOF
     cat > "$rootfs/etc/motd" << 'EOF'
 
-  ██████╗ ██╗   ██╗███╗   ██╗██╗██╗  ██╗  v5
- ██╔═══██╗██║   ██║████╗  ██║██║╚██╗██╔╝
- ██║   ██║██║   ██║██╔██╗ ██║██║ ╚███╔╝
- ╚██████╔╝╚██████╔╝██║ ╚████║██║██╔╝ ██╗
-  ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝╚═╝╚═╝  ╚═╝
-
-Qunix OS 5.0 — Plugin-capable Rust OS
-Type 'pluginctl list' to see active plugins.
-
+Qunix OS 0.2 — Plugin-capable Rust OS
 EOF
     cat > "$rootfs/etc/profile" << 'EOF'
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
@@ -522,7 +521,7 @@ do_check() {
 }
 
 print_usage() {
-    echo "Qunix OS Build System v5.0"
+    echo "Qunix OS Build System v0.2"
     echo ""
     echo "Usage: $0 COMMAND"
     echo ""

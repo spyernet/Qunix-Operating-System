@@ -76,10 +76,15 @@ fn try_exec_path(path: &str) -> bool {
             proc.address_space = result.address_space;
             crate::drivers::serial::write_str("[user] post-address-space\n");
             proc.context.rip   = result.entry;
+            crate::drivers::serial::write_str("[user] post-rip\n");
             proc.context.rsp   = result.stack_top;
+            crate::drivers::serial::write_str("[user] post-rsp\n");
             proc.cwd           = String::from("/");
+            crate::drivers::serial::write_str("[user] post-cwd\n");
             proc.personality   = crate::abi_compat::PERSONALITY_QUNIX;
+            crate::drivers::serial::write_str("[user] post-personality\n");
             proc.fs_base       = result.tls_addr;
+            crate::drivers::serial::write_str("[user] post-fs-base\n");
 
             // Wire stdin/stdout/stderr to /dev/tty
             crate::drivers::serial::write_str("[user] pre-stdio\n");
